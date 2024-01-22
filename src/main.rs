@@ -5,6 +5,8 @@ use http::StatusCode;
 use s3_access_log_rust::convert_wsc_str_to_s3_access_log_record;
 use std::collections::HashMap;
 use tracing::{debug, info};
+use futures::future;
+
 async fn get_s3_file_content(
     client: &Client,
     bucket: &str,
@@ -20,7 +22,7 @@ async fn get_s3_file_content(
 
 fn get_iterator_s3_objects(
     client: &Client,
-    bucket: &str,
+    bucket: &str
 ) -> aws_smithy_async::future::pagination_stream::PaginationStream<
     Result<
         ListObjectsV2Output,
@@ -50,31 +52,11 @@ async fn main() -> Result<(), aws_sdk_s3::Error> {
         info!("start iterator");
         match result {
             Ok(output) => {
-                for object in output.contents() {
-                    let key = object.key().unwrap();
-                    let logs_to_parse = get_s3_file_content(&client, bucket, key).await;
-                    let processed_logs =
-                        convert_wsc_str_to_s3_access_log_record(&logs_to_parse.unwrap());
-                    for log in processed_logs {
-                        match log.operation.as_str() {
-                            "WEBSITE.GET.OBJECT" => match log.http_status {
-                                StatusCode::OK => {
-                                    if log.key.ends_with(".html") {
-                                        let counter =
-                                            counter_page_access.entry(log.key).or_insert(0);
-                                        *counter += 1;
-                                    }
-                                }
-                                _ => {
-                                    debug!("invalide status code");
-                                }
-                            },
-                            other => {
-                                debug!("not useful operation {other:?}");
-                            }
-                        }
-                    }
-                }
+                let futures = output.contents().iter().map(|object| get_s3_file_content(&client, bucket,object.key().unwrap())).collect::<Vec<_>>();
+                let logs_to_parse: Vec<_> = future::join_all(futures).await;
+                let processed_logs: Vec<_> = logs_to_parse.iter().map(|object| convert_wsc_str_to_s3_access_log_record(object.as_ref().unwrap())).collect::<Vec<_>>().into_iter().flatten().collect();
+                let valid_logs: Vec<_> = processed_logs.iter().filter(|log| log.operation.eq("WEBSITE.GET.OBJECT") && log.http_status == StatusCode::OK && log.key.ends_with(".html")).collect();
+                valid_logs.iter().for_each(|log| *(counter_page_access.entry(log.key.to_owned()).or_insert(0))+= 1);
             }
             Err(err) => {
                 eprintln!("{err:?}");
