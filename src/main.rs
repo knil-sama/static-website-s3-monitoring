@@ -7,6 +7,10 @@ use std::collections::HashMap;
 use tracing::{info};
 use futures::future;
 use plotters::prelude::*;
+use lambda_runtime::{service_fn, run, LambdaEvent};
+use aws_lambda_events::encodings::Error;
+use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+use aws_lambda_events::cloudwatch_events::CloudWatchEvent;
 
 async fn get_s3_file_content(
     client: &Client,
@@ -87,10 +91,14 @@ fn mapping_page_name(full_path: String) -> String {
     }
 }
 
+/// This is the main body for the function.
+/// Write your code inside it.
+/// There are some code example in the following URLs:
+/// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
+/// - https://github.com/aws-samples/serverless-rust-demo/
 #[allow(clippy::result_large_err)]
-#[tokio::main]
-async fn main() -> Result<(), aws_sdk_s3::Error> {
-    tracing_subscriber::fmt::init();
+async fn function_handler(_event: LambdaEvent<CloudWatchEvent>) -> Result<(), Error> {
+    // Extract some useful information from the request
 
     let config = aws_config::from_env().region("us-east-1").load().await;
     let client = Client::new(&config);
@@ -112,6 +120,23 @@ async fn main() -> Result<(), aws_sdk_s3::Error> {
         }
     }
     info!("{counter_page_access:?}");
-    generate_graph(counter_page_access);
+    let _ = generate_graph(counter_page_access);
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        // disable printing the name of the module in every log line.
+        .with_target(false)
+        // disabling time is handy because CloudWatch will add the ingestion time.
+        .without_time()
+        .init();
+
+    run(service_fn(function_handler)).await
 }
