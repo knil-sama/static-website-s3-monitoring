@@ -1,19 +1,19 @@
 use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error;
 use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output;
-use aws_sdk_s3::Client;
 use http::StatusCode;
+use aws_sdk_dynamodb::Client as DynamodbClient;
+use aws_sdk_dynamodb::types::AttributeValue;
+use aws_sdk_s3::Client as S3Client;
 use s3_access_log_rust::convert_wsc_str_to_s3_access_log_record;
-use std::collections::HashMap;
-use tracing::{info};
 use futures::future;
-use plotters::prelude::*;
 use lambda_runtime::{service_fn, run, LambdaEvent};
 use aws_lambda_events::encodings::Error;
 use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 use aws_lambda_events::cloudwatch_events::CloudWatchEvent;
+use chrono::{DateTime, Utc};
 
 async fn get_s3_file_content(
-    client: &Client,
+    client: &S3Client,
     bucket: &str,
     key: &str,
 ) -> Result<String, anyhow::Error> {
@@ -26,7 +26,7 @@ async fn get_s3_file_content(
 }
 
 fn get_iterator_s3_objects(
-    client: &Client,
+    client: &S3Client,
     bucket: &str
 ) -> aws_smithy_async::future::pagination_stream::PaginationStream<
     Result<
@@ -44,45 +44,13 @@ fn get_iterator_s3_objects(
         .send()
 }
 
-fn generate_graph(data: HashMap::<String, u32>) -> Result<(), Box<dyn std::error::Error>> {
-    const OUT_FILE_NAME: &str = "histogram.png";
-    let root = BitMapBackend::new(OUT_FILE_NAME, (640, 480)).into_drawing_area();
-
-    root.fill(&WHITE)?;
-
-    let mut chart = ChartBuilder::on(&root)
-        .x_label_area_size(35)
-        .y_label_area_size(40)
-        .margin(5)
-        .caption("Cdemonchy.com stats", ("sans-serif", 50.0))
-        .build_cartesian_2d(0..(data.keys().len()-1) as u32, 0u32..*data.values().max().unwrap())?;
-
-    chart
-        .configure_mesh()
-        .disable_x_mesh()
-        .bold_line_style(WHITE.mix(0.3))
-        .y_desc("Count")
-        .x_desc("page")
-        .x_label_formatter(&|x| format!("{:?}",data.clone().into_keys().collect::<Vec<String>>()[*x as usize]))
-        .axis_desc_style(("sans-serif", 15))
-        .draw()?;
-
-    chart.draw_series(
-        Histogram::vertical(&chart)
-            .style(RED.mix(0.5).filled())
-            .data(data.values().enumerate().map(|(x, y)| (x as u32, *y)))
-            //.data(data.vqlues().map(|x: &u32| (*x, 1))),
-    )?;
-
-    // To avoid the IO failure being ignored silently, we manually call the present function
-    root.present().expect("Unable to write result to file, please make sure 'plotters-doc-data' dir exists under current dir");
-    println!("Result has been saved to {}", OUT_FILE_NAME);
-    Ok(())
+fn is_log_from_s3_static_page(operation: &str, http_status: StatusCode, filename: &str) -> bool {
+    return operation.eq("WEBSITE.GET.OBJECT") && http_status == StatusCode::OK && filename.ends_with(".html")
 }
 
 fn mapping_page_name(full_path: String) -> String {
     match full_path.as_str() {
-        "index.html" => "csv".to_string(),
+        "index.html" => "cv".to_string(),
         _ =>  {
             let mut splitted = full_path.split('/');
             let penultimate = splitted.clone().count()-2;
@@ -91,6 +59,19 @@ fn mapping_page_name(full_path: String) -> String {
     }
 }
 
+async fn update_database(client: &DynamodbClient, table_name: &str, page_name: String, time: DateTime<Utc>) -> Result<String, anyhow::Error>{
+    let page_name_dynamodb = AttributeValue::S(page_name);
+    let time_dynamodb = AttributeValue::S(time.to_rfc3339());
+
+    let request = client
+        .put_item()
+        .table_name(table_name)
+        .item("page_name", page_name_dynamodb)
+        .item("time", time_dynamodb);
+    request.send().await?;
+    Ok("done".to_owned())
+
+}
 /// This is the main body for the function.
 /// Write your code inside it.
 /// There are some code example in the following URLs:
@@ -101,26 +82,27 @@ async fn function_handler(_event: LambdaEvent<CloudWatchEvent>) -> Result<(), Er
     // Extract some useful information from the request
 
     let config = aws_config::from_env().region("us-east-1").load().await;
-    let client = Client::new(&config);
+    let s3_client = S3Client::new(&config);
+    let dynamodb_client = DynamodbClient::new(&config);
     let bucket = "cdemonchy-logs-us-east-1";
-    let mut iterator_s3_object = get_iterator_s3_objects(&client, bucket);
-    let mut counter_page_access = HashMap::<String, u32>::new();
+    let table = "cdemonchy-blog-stats";
+    let mut iterator_s3_object = get_iterator_s3_objects(&s3_client, bucket);
     while let Some(result) = iterator_s3_object.next().await {
         match result {
             Ok(output) => {
-                let futures = output.contents().iter().map(|object| get_s3_file_content(&client, bucket,object.key().unwrap())).collect::<Vec<_>>();
+                let futures = output.contents().iter().map(|object| get_s3_file_content(&s3_client, bucket,object.key().unwrap())).collect::<Vec<_>>();
                 let logs_to_parse: Vec<_> = future::join_all(futures).await;
                 let processed_logs: Vec<_> = logs_to_parse.iter().map(|object| convert_wsc_str_to_s3_access_log_record(object.as_ref().unwrap())).collect::<Vec<_>>().into_iter().flatten().collect();
-                let valid_logs: Vec<_> = processed_logs.iter().filter(|log| log.operation.eq("WEBSITE.GET.OBJECT") && log.http_status == StatusCode::OK && log.key.ends_with(".html")).collect();
-                valid_logs.iter().for_each(|log| *(counter_page_access.entry(mapping_page_name(log.key.clone())).or_insert(0))+= 1);
+                let valid_logs: Vec<_> = processed_logs.iter().filter(|log| is_log_from_s3_static_page(&log.operation, log.http_status, &log.key)).collect();
+                let other_futures = valid_logs.iter().for_each(|log| {update_database(&dynamodb_client, &table, mapping_page_name(log.key.clone()), log.time.clone());}).collect::<Vec<_>>();
+                let _: Vec<_> = future::join_all(other_futures).await;
+
             }
             Err(err) => {
                 eprintln!("{err:?}");
             }
         }
     }
-    info!("{counter_page_access:?}");
-    let _ = generate_graph(counter_page_access);
     Ok(())
 }
 
