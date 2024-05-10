@@ -80,21 +80,23 @@ async fn update_database(client: &DynamodbClient, table_name: &str, page_name: S
 #[allow(clippy::result_large_err)]
 async fn function_handler(_event: LambdaEvent<CloudWatchEvent>) -> Result<(), Error> {
     // Extract some useful information from the request
-
+    tracing::info!("Rust function invoked");
     let config = aws_config::from_env().region("us-east-1").load().await;
     let s3_client = S3Client::new(&config);
     let dynamodb_client = DynamodbClient::new(&config);
     let bucket = "cdemonchy-logs-us-east-1";
     let table = "cdemonchy-blog-stats";
     let mut iterator_s3_object = get_iterator_s3_objects(&s3_client, bucket);
+    tracing::info!("Starting iteration");
     while let Some(result) = iterator_s3_object.next().await {
         match result {
             Ok(output) => {
                 let futures = output.contents().iter().map(|object| get_s3_file_content(&s3_client, bucket,object.key().unwrap())).collect::<Vec<_>>();
                 let logs_to_parse: Vec<_> = future::join_all(futures).await;
-                let processed_logs: Vec<_> = logs_to_parse.iter().map(|object| convert_wsc_str_to_s3_access_log_record(object.as_ref().unwrap())).collect::<Vec<_>>().into_iter().flatten().collect();
+                // use filter map because we got case were there is no time to in s3 access log and we can´t do anything with it
+                let processed_logs: Vec<_> = logs_to_parse.iter().filter_map(|object| Some(convert_wsc_str_to_s3_access_log_record(object.as_ref().unwrap(), true))).collect::<Vec<_>>().into_iter().flatten().collect();
                 let valid_logs: Vec<_> = processed_logs.iter().filter(|log| is_log_from_s3_static_page(&log.operation, log.http_status, &log.key)).collect();
-                let other_futures = valid_logs.iter().for_each(|log| {update_database(&dynamodb_client, &table, mapping_page_name(log.key.clone()), log.time.clone());}).collect::<Vec<_>>();
+                let other_futures = valid_logs.iter().map(|log| update_database(&dynamodb_client, &table, mapping_page_name(log.key.clone()), log.time.clone())).collect::<Vec<_>>();
                 let _: Vec<_> = future::join_all(other_futures).await;
 
             }
@@ -103,6 +105,7 @@ async fn function_handler(_event: LambdaEvent<CloudWatchEvent>) -> Result<(), Er
             }
         }
     }
+    tracing::info!("Ending iteration");
     Ok(())
 }
 
