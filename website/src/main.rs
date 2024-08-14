@@ -1,12 +1,11 @@
 #[macro_use] extern crate rocket;
 use aws_sdk_dynamodb::Client as DynamodbClient;
-use futures::executor::block_on;
 
 
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 use aws_sdk_dynamodb::error::SdkError;
-use aws_sdk_dynamodb::types::{AttributeValue, PutRequest};
+use aws_sdk_dynamodb::types::{AttributeValue};
 use aws_smithy_types::error::operation::BuildError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -75,28 +74,9 @@ fn as_string(val: Option<&AttributeValue>, default: &String) -> String {
     default.to_owned()
 }
 
-fn as_string_vec(val: Option<&AttributeValue>) -> Vec<String> {
-    if let Some(val) = val {
-        if let Ok(val) = val.as_l() {
-            return val
-                .iter()
-                .map(|v| as_string(Some(v), &"".to_string()))
-                .collect();
-        }
-    }
-    // val
-    //         .map(|v| v.as_l())
-    //         .unwrap_or_else(|| Ok(&Vec::<AttributeValue>::new()))
-    //         .unwrap_or_else(|_| &Vec::<AttributeValue>::new())
-    //         .iter()
-    //         .map(|v| as_string(Some(v), &"".to_string()))
-    //         .collect();
-    vec![]
-}
-
 impl From<&HashMap<String, AttributeValue>> for PageAccess {
     fn from(value: &HashMap<String, AttributeValue>) -> Self {
-        let mut page_access = PageAccess::new(
+        let page_access = PageAccess::new(
             as_string(value.get("page_name"), &"".to_string()),
             as_string(value.get("time"), &"".to_string()),
         );
@@ -138,12 +118,15 @@ async fn index() -> String {
 // #[derive(Serialize, Deserialize)]
 // struct S { //just for example
 //     txt: String,
-    println!("coucou");
-    let res: Vec<PageAccess>  = page_access().await.unwrap();
+
+    let res: Vec<PageAccess>  = match page_access().await {
+        Ok(page_access) => page_access,
+        Err(_error) => return "Can´t reach database".to_string(), // should swap error and generic message based on env
+    };
     println!("{res:?}");
     let counter_page = res.iter().map(|x| &x.page_name).collect::<Counter<_>>();
     println!("{counter_page:?}");
-    return format!("{counter_page:?}");
+    format!("{counter_page:?}")
 }
 
 #[launch]
