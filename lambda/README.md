@@ -32,4 +32,5 @@ cargo lambda watch
 In another run this to send data
 
 ```bash
-cargo lambda invoke --data-file example_eventbridge_event.json 
+cargo lambda invoke --data-file example_eventbridge_event.json
+```

@@ -1,17 +1,15 @@
-#[macro_use] extern crate rocket;
 use aws_sdk_dynamodb::Client as DynamodbClient;
-
-
-// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-// SPDX-License-Identifier: Apache-2.0
 use aws_sdk_dynamodb::error::SdkError;
 use aws_sdk_dynamodb::types::{AttributeValue};
 use aws_smithy_types::error::operation::BuildError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use lambda_http::{run, http::{StatusCode, Response}, service_fn, Error, IntoResponse, Request, RequestPayloadExt};
 use std::collections::HashMap;
 use thiserror::Error;
 use counter::Counter;
+use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+use serde_json::json;
 
 #[derive(Error, Debug)]
 pub enum PageAccessError {
@@ -99,26 +97,7 @@ pub async fn page_access() -> Result<Vec<PageAccess>, PageAccessError> {
     }
 }
 
-#[get("/")]
 async fn index() -> String {
-
-    // if let Some(items) = response.items {
-    //     let movies: Vec<_> = items.iter().map(|v| v.into()).collect::<Vec<_>>();
-    //     return &movies.join("-");
-    // } else {
-    //     return "Nothing";
-    // }}
-    // if let Some(item) = response.unwrap().items {
-    //     dbg!(item);
-    // }
-//     use serde_derive::{Deserialize, Serialize};
-// use serde_dynamo::from_item;
-// use serde_json::{json, Value};
-
-// #[derive(Serialize, Deserialize)]
-// struct S { //just for example
-//     txt: String,
-
     let res: Vec<PageAccess>  = match page_access().await {
         Ok(page_access) => page_access,
         Err(_error) => return "Can´t reach database".to_string(), // should swap error and generic message based on env
@@ -126,10 +105,26 @@ async fn index() -> String {
     println!("{res:?}");
     let counter_page = res.iter().map(|x| &x.page_name).collect::<Counter<_>>();
     println!("{counter_page:?}");
-    format!("{counter_page:?}")
+    json!(*counter_page).to_string()
 }
 
-#[launch]
-fn rocket() -> _ {
-    rocket::build().mount("/", routes![index])
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    tracing_subscriber::fmt()
+        .without_time()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
+    run(service_fn(function_handler)).await
+}
+
+pub async fn function_handler(_event: Request) -> Result<impl IntoResponse, Error> {
+
+    let response = Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(index().await)
+        .map_err(Box::new)?;
+
+    Ok(response)
 }
