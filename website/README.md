@@ -1,3 +1,3 @@
-```bqsh
+```bash
 cargo run
 ```
