@@ -1,15 +1,17 @@
 use aws_sdk_dynamodb::Client as DynamodbClient;
 use aws_sdk_dynamodb::error::SdkError;
 use aws_sdk_dynamodb::types::{AttributeValue};
-use aws_smithy_types::error::operation::BuildError;
+//use aws_smithy_types::error::operation::BuildError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use lambda_http::{run, http::{StatusCode, Response}, service_fn, Error, IntoResponse, Request, RequestPayloadExt};
+//use lambda_http::{run, http::{StatusCode, Response}, service_fn, Error, IntoResponse, Request, RequestPayloadExt};
 use std::collections::HashMap;
 use thiserror::Error;
 use counter::Counter;
-use tracing_subscriber::filter::{EnvFilter, LevelFilter};
+//use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 use serde_json::json;
+use rocket::{self, get, routes};
+use lambda_web::{is_running_on_lambda, launch_rocket_on_lambda, LambdaError};
 
 #[derive(Error, Debug)]
 pub enum PageAccessError {
@@ -97,15 +99,9 @@ pub async fn page_access() -> Result<Vec<PageAccess>, PageAccessError> {
     }
 }
 
+/*
 async fn index() -> String {
-    let res: Vec<PageAccess>  = match page_access().await {
-        Ok(page_access) => page_access,
-        Err(_error) => return "Can´t reach database".to_string(), // should swap error and generic message based on env
-    };
-    println!("{res:?}");
-    let counter_page = res.iter().map(|x| &x.page_name).collect::<Counter<_>>();
-    println!("{counter_page:?}");
-    json!(*counter_page).to_string()
+
 }
 
 #[tokio::main]
@@ -127,4 +123,30 @@ pub async fn function_handler(_event: Request) -> Result<impl IntoResponse, Erro
         .map_err(Box::new)?;
 
     Ok(response)
+}
+*/
+
+#[get("/stats")]
+async fn stats() -> String {
+    let res: Vec<PageAccess>  = match page_access().await {
+        Ok(page_access) => page_access,
+        Err(_error) => return "Can´t reach database".to_string(), // should swap error and generic message based on env
+    };
+    println!("{res:?}");
+    let counter_page = res.iter().map(|x| &x.page_name).collect::<Counter<_>>();
+    println!("{counter_page:?}");
+    json!(*counter_page).to_string()
+}
+
+#[rocket::main]
+async fn main() -> Result<(), LambdaError> {
+    let rocket = rocket::build().mount("/", routes![stats]);
+    if is_running_on_lambda() {
+        // Launch on AWS Lambda
+        launch_rocket_on_lambda(rocket).await?;
+    } else {
+        // Launch local server
+        let _ = rocket.launch().await?;
+    }
+    Ok(())
 }
