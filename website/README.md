@@ -64,3 +64,7 @@ aws lambda create-function-url-config \
 
 
      
+
+This works
+cargo lambda build 
+cargo lambda deploy --enable-function-url

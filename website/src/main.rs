@@ -4,13 +4,13 @@ use aws_sdk_dynamodb::types::{AttributeValue};
 //use aws_smithy_types::error::operation::BuildError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use lambda_http::{run, http::{StatusCode, Response},Body, service_fn, Error, IntoResponse, Request, RequestPayloadExt};
+use lambda_http::{run, http::Response,Body, service_fn, Error, Request};
 use std::collections::HashMap;
 use thiserror::Error;
 use counter::Counter;
 //use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 use serde_json::json;
-use rocket::{self, get, routes};
+use rocket::{self, get};
 //use lambda_web::{is_running_on_lambda, launch_rocket_on_lambda, LambdaError};
 
 #[derive(Error, Debug)]
