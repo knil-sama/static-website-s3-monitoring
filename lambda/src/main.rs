@@ -78,7 +78,7 @@ async fn update_database(client: &DynamodbClient, table_name: &str, page_name: S
 /// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
 /// - https://github.com/aws-samples/serverless-rust-demo/
 #[allow(clippy::result_large_err)]
-async fn function_handler(_event: LambdaEvent<CloudWatchEvent>) -> Result<(), Error> {
+async fn handler(_event: LambdaEvent<CloudWatchEvent>) -> Result<(), Error> {
     // Extract some useful information from the request
     tracing::info!("Rust function invoked");
     let config = aws_config::from_env().region("us-east-1").load().await;
