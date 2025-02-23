@@ -1,17 +1,13 @@
 use aws_sdk_dynamodb::Client as DynamodbClient;
 use aws_sdk_dynamodb::error::SdkError;
 use aws_sdk_dynamodb::types::{AttributeValue};
-//use aws_smithy_types::error::operation::BuildError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use lambda_http::{run, http::Response,Body, service_fn, Error, Request};
 use std::collections::HashMap;
 use thiserror::Error;
 use counter::Counter;
-//use tracing_subscriber::filter::{EnvFilter, LevelFilter};
 use serde_json::json;
-use rocket::{self, get};
-//use lambda_web::{is_running_on_lambda, launch_rocket_on_lambda, LambdaError};
 
 #[derive(Error, Debug)]
 pub enum PageAccessError {
@@ -99,12 +95,22 @@ pub async fn page_access() -> Result<Vec<PageAccess>, PageAccessError> {
     }
 }
 
+async fn stats() -> Body {
+    let res: Vec<PageAccess>  = match page_access().await {
+        Ok(page_access) => page_access,
+        Err(_error) => return lambda_http::Body::Text("Can´t reach database".to_string()), // should swap error and generic message based on env
+    };
+    println!("{res:?}");
+    let counter_page = res.iter().map(|x| &x.page_name).collect::<Counter<_>>();
+    println!("{counter_page:?}");
+    lambda_http::Body::Text(json!(*counter_page).to_string())
+}
 
-async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
+async fn function_handler(_event: Request) -> Result<Response<Body>, Error> {
     let resp = Response::builder()
         .status(200)
         .header("content-type", "text/html")
-        .body("Hello AWS Lambda HTTP request".into())
+        .body(stats().await)
         .map_err(Box::new)?;
     Ok(resp)
 }
@@ -117,16 +123,4 @@ async fn main() -> Result<(), Error> {
         .without_time()
         .init();
     run(service_fn(function_handler)).await
-}
-
-#[get("/stats")]
-async fn stats() -> String {
-    let res: Vec<PageAccess>  = match page_access().await {
-        Ok(page_access) => page_access,
-        Err(_error) => return "Can´t reach database".to_string(), // should swap error and generic message based on env
-    };
-    println!("{res:?}");
-    let counter_page = res.iter().map(|x| &x.page_name).collect::<Counter<_>>();
-    println!("{counter_page:?}");
-    json!(*counter_page).to_string()
 }
