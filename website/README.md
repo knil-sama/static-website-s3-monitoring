@@ -63,8 +63,12 @@ aws lambda create-function-url-config \
      --function-name website-bis-bis
 
 
-     
+
+aws iam  create-role --role-name static-website-lambda-ro-dynamodb --assume-role-policy-document file://lambda_policy_assume.json
+
+aws iam create-policy --policy-name static-website-lambda-ro-dynamodb --policy-document file://lambda_policy.json
+aws iam attach-role-policy --role-name static-website-lambda-ro-dynamodb  --policy-arn "arn:aws:iam::650593633156:policy/static-website-lambda-ro-dynamodb"
 
 This works
 cargo lambda build 
-cargo lambda deploy --enable-function-url
+cargo lambda deploy --iam-role static-website-lambda-ro-dynamodb --enable-function-url
